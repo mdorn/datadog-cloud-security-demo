@@ -1,0 +1,118 @@
+#!/bin/bash
+# cspm-remed-demo host bootstrap. Output: /var/log/cloud-init-output.log
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# --- Keep the pinned AMI's packages as they are: no automatic updates -------
+systemctl disable --now unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer || true
+systemctl mask apt-daily.service apt-daily-upgrade.service || true
+cat > /etc/apt/apt.conf.d/20auto-upgrades <<'APT'
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+APT::Periodic::Download-Upgradeable-Packages "0";
+APT::Periodic::AutocleanInterval "0";
+APT
+APT_OPTS="-y -o DPkg::Lock::Timeout=600 --no-install-recommends"
+
+# --- Swap (t3.micro has 1 GiB RAM) -------------------------------------------
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+# --- Docker + ECR credential helper (install only, no upgrade) --------------
+apt-get -o DPkg::Lock::Timeout=600 update
+apt-get install $APT_OPTS docker.io amazon-ecr-credential-helper curl ca-certificates gnupg
+systemctl enable --now docker
+install -d -m 0700 /root/.docker
+cat > /root/.docker/config.json <<'JSON'
+{ "credHelpers": { "${ecr_registry}": "ecr-login" } }
+JSON
+
+# --- Datadog Agent -----------------------------------------------------------
+# The API key is never written to disk: the Agent reads it from SSM at runtime.
+install -d -m 0755 /etc/datadog-agent
+cat > /etc/datadog-agent/datadog.yaml <<'YAML'
+api_key: "ENC[${dd_api_key_param}]"
+site: ${dd_site}
+env: demo
+tags:
+  - team:web
+  - service:demo-app
+  - owner:matt.dorn@datadoghq.com
+  - managed-by:terraform
+
+secret_backend_type: aws.ssm
+secret_backend_config:
+  aws_session:
+    aws_region: ${aws_region}
+
+sbom:
+  enabled: true
+  container_image:
+    enabled: true
+    analyzers: ["os", "languages"]
+  host:
+    enabled: true
+    analyzers: ["os", "languages"]
+
+container_image:
+  enabled: true
+YAML
+chmod 0640 /etc/datadog-agent/datadog.yaml
+
+curl -fsSL https://install.datadoghq.com/scripts/install_script_agent7.sh -o /tmp/dd-install.sh
+DD_SITE="${dd_site}" DD_INSTALL_ONLY=true bash /tmp/dd-install.sh
+chown dd-agent:dd-agent /etc/datadog-agent/datadog.yaml
+usermod -aG docker dd-agent
+systemctl enable datadog-agent
+systemctl restart datadog-agent
+
+# --- Demo app container (runs whatever tag was last deployed) ---------------
+install -d -m 0755 /etc/${prefix}
+cat > /usr/local/bin/${prefix}-run-app <<'SH'
+#!/bin/bash
+set -euo pipefail
+TAG_FILE=/etc/${prefix}/image-tag
+IMAGE_REPO=${ecr_registry}/${ecr_repo_name}
+docker rm -f demo-app >/dev/null 2>&1 || true
+if [ ! -s "$TAG_FILE" ]; then
+  echo "no image tag deployed yet; nothing to run"
+  exit 0
+fi
+TAG="$(cat "$TAG_FILE")"
+docker pull "$IMAGE_REPO:$TAG"
+docker run -d --name demo-app --restart unless-stopped \
+  --hostname demo-app --add-host demo-app:127.0.0.1 \
+  --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --memory 256m --pids-limit 100 \
+  -l com.datadoghq.tags.env=demo \
+  -l com.datadoghq.tags.service=demo-app \
+  -l "com.datadoghq.tags.version=$TAG" \
+  "$IMAGE_REPO:$TAG"
+SH
+chmod 0755 /usr/local/bin/${prefix}-run-app
+
+cat > /etc/systemd/system/${prefix}-app.service <<'UNIT'
+[Unit]
+Description=cspm-remed-demo heartbeat app container
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=HOME=/root
+ExecStart=/usr/local/bin/${prefix}-run-app
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now ${prefix}-app.service
+
+echo "cspm-remed-demo bootstrap complete"
