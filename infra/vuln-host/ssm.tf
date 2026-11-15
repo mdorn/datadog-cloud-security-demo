@@ -27,7 +27,7 @@ resource "aws_ssm_document" "redeploy" {
       inputs = {
         timeoutSeconds = "600"
         runCommand = [
-          "set -euo pipefail",
+          "set -eu",
           "install -d -m 0755 /etc/${local.prefix}",
           "echo '{{ ImageTag }}' > /etc/${local.prefix}/image-tag",
           "systemctl restart ${local.prefix}-app.service",
