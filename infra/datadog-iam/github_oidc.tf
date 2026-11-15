@@ -27,7 +27,7 @@ data "aws_iam_policy_document" "github_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${local.github_repo}:ref:refs/heads/main"]
+      values   = ["${local.github_oidc_sub_prefix}:ref:refs/heads/main"]
     }
   }
 }
