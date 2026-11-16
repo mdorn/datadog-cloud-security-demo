@@ -11,13 +11,26 @@ Findings aren't instant. Resource collection and evaluation can take several hou
 | Resource | Misconfiguration | Expected OOTB rule (id) | Severity | Remediation in demo | Re-armed by |
 |---|---|---|---|---|---|
 | S3 `cspm-remed-demo-public-assets-<suffix>` | Bucket-level Block Public Access off (all four settings `false`) | S3 buckets should have 'Block Public Access' enabled (`hkp-p6b-f7w`) | medium | Workflow `cspm-remed-demo-s3-block-public-access` (enable BPA) | `make break` / `make reset` |
-| same | Bucket policy allows `Principal: *` `s3:GetObject` on `placeholder.txt` only | S3 bucket contents should only be accessible by authorized principals (`w95-9o2-mw0`) | high | Same workflow: `RestrictPublicBuckets` makes the policy ineffective | same |
+| same | Bucket policy allows `Principal: *` `s3:GetObject` on `placeholder.txt` only | ~~S3 bucket contents should only be accessible by authorized principals (`w95-9o2-mw0`)~~: **observed passing**. The rule doesn't flag a policy that's scoped to a single object. | (high) | n/a | n/a |
 | same | same | S3 bucket policies should not allow wildcard principals (`def-000-ea8`) | high | Same workflow (should pass once BPA is on; verify on first run) | same |
 | SG `cspm-remed-demo-open-ssh` | Ingress tcp/22 from `0.0.0.0/0`, attached to nothing | Security groups should restrict traffic to trusted IPv4 addresses (`tch-c9p-gh4`) | medium | Security group workflow (revoke the 0.0.0.0/0 rule) | same |
 | IAM user `cspm-remed-demo-overprivileged` | Inline policy `cspm-remed-demo-broad-access` allows `*` on `*` | AWS IAM user has administrative privileges (`def-000-eui`) | high | None (detect/prioritize only) | n/a (not changed by the demo) |
 | same | same, and the user is never used | AWS IAM user has administrative privileges and is inactive (`def-000-rf2`) | high | None | n/a |
 
 Note: `def-000-igl` ("Security Group should restrict SSH access from the internet") is an **Azure** NSG rule despite its name. The AWS SSH rule is `tch-c9p-gh4`.
+
+### Observed time to first failing finding
+Resources were created at 2026-11-15 20:02 UTC. Times are from each finding's `evaluation_changed_at`.
+
+| Finding | First failing | Delay |
+|---|---|---|
+| `tch-c9p-gh4` (SG) | 20:08 | ~6 min |
+| `def-000-ea8` (S3 wildcard principal) | 20:12 | ~10 min |
+| `hkp-p6b-f7w` (S3 BPA) | 20:21 | ~19 min |
+| `def-000-eui` (IAM admin user) | 21:52 | ~1 h 50 min |
+| `def-000-rf2` (IAM admin + inactive) | 01:52 next day | ~6 h |
+
+The findings API and the UI can lag behind `evaluation_changed_at` by a while. An early check at about 20:45 didn't show them yet.
 
 ## Vulnerabilities (`infra/vuln-host/`, `app/`)
 
