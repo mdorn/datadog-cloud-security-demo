@@ -18,6 +18,7 @@ Demo storyline: **detect → prioritize → route → remediate → verify** wit
 | New IAM user → "IAM user has administrative privileges" | ~1 h 50 min |
 | New IAM user → "...and is inactive" | ~6 h |
 | Security group fixed (rule revoked) → finding passes | ~9 min |
+| Security group re-armed (rule re-created) → finding fails again (notification fires) | ~2 min |
 | Datadog docs: misconfiguration re-evaluation interval | 15 min to 4 h depending on resource type |
 | Container image vulnerabilities | After the Agent scans a newly pulled image (minutes) |
 | Host vulnerabilities | After the Agent's host SBOM scan (first one at boot, then periodic) |
