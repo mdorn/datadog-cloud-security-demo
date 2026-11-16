@@ -5,6 +5,8 @@ resource "random_id" "bucket_suffix" {
 resource "aws_s3_bucket" "public_assets" {
   bucket        = "${local.prefix}-public-assets-${random_id.bucket_suffix.hex}"
   force_destroy = true
+
+  tags = { Name = "${local.prefix}-public-assets-${random_id.bucket_suffix.hex}" }
 }
 
 resource "aws_s3_bucket_ownership_controls" "public_assets" {
