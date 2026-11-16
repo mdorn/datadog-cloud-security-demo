@@ -67,4 +67,11 @@ Account findings on non-demo resources (`mdorn-dd`, `launch-wizard-5`, IAM users
 
 ## Routing (Phase 4)
 No OOTB rule rates these misconfigurations as critical. The plan was to route `env:demo` misconfigurations of medium severity and above, plus critical vulnerabilities.
-**Observed:** about 10 incidental medium findings are also tagged `env:demo` (VPC endpoints, flow logs, and so on). Medium+ routing would post those to Slack too, so revisit this in Phase 4. The likely fix is to filter the notification rule to the demo rule IDs listed above.
+**Implemented** (`datadog/notification_rules.tf`): about 10 incidental medium findings are also tagged `env:demo` (VPC endpoints, flow logs, and so on). So the rules route by resource rather than by severity alone:
+- `cspm-remed-demo-s3-public`: `env:demo name:<bucket>`, medium and above
+- `cspm-remed-demo-sg-open-ssh`: `env:demo name:cspm-remed-demo-open-ssh`, medium and above
+- `cspm-remed-demo-critical-vulns`: `env:demo`, critical container/host/library vulnerabilities, hourly digest
+
+All three target `@slack-Datadog-mdorn-demo-public`.
+
+**Verified 2026-11-16:** the security group re-armed at 02:16:24 UTC, the finding failed again at 02:18:42, and the Slack post arrived in #mdorn-demo-public. The S3 route isn't verified yet. It needs a fix, a pass, then `make break`.
