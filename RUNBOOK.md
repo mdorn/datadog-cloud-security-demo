@@ -55,8 +55,12 @@ The findings API and UI can lag `evaluation_changed_at` by a while. **Notificati
 - Run `scripts/preflight.sh` before any AWS or Terraform command
 
 ## State
-Terraform state is **local** to each stack directory and gitignored (the repo is public).
-Don't commit `*.tfstate`, and don't delete it: losing state orphans resources.
+Terraform state lives in S3: `s3://tfstate-mdorn/cspm-remed-demo/<stack>/terraform.tfstate`, where `<stack>` is `datadog`, `datadog-iam`, `network`, `vulnerable` or `vuln-host`. You created the bucket, and Terraform doesn't manage it. It's in us-east-2 with SSE-S3 encryption, Block Public Access on and **versioning enabled**.
+- **Locking:** S3-native (`use_lockfile = true`, Terraform ≥ 1.10). A `terraform.tfstate.tflock` object exists while a plan or apply runs. If a run crashes and leaves a lock behind, run `terraform -chdir=<stack> force-unlock <lock-id>`, but only when no other run is active.
+- **New machine:** run `terraform -chdir=<stack> init` in each stack. No local state is needed.
+- **Recover a previous state:** `aws s3api list-object-versions --bucket tfstate-mdorn --prefix cspm-remed-demo/<stack>/`, then copy the version you want back over the current object with `aws s3api copy-object … --copy-source "tfstate-mdorn/<key>?versionId=<id>"`.
+- **What state contains:** Datadog external IDs, the app key **ID** and resource IDs. It doesn't contain the Datadog API key, which is write-only. Never commit state files (`.gitignore` covers any local leftovers).
+- **Leftover files:** pre-migration local copies remain as `terraform.tfstate*` in each stack directory, with a backup at `~/cspm-remed-demo-state-backup-20261116T030627Z/`. Terraform ignores them now.
 
 ## Ownership
 | Component | Owner | Notes |
@@ -99,7 +103,7 @@ Run `scripts/preflight.sh` first, and `export TF_VAR_dd_api_key="$DD_API_KEY" TF
    - Jira issues in `KAN` (use the JQL from `make reset`)
    - the Slack channel
    - the app key's Actions API Access toggle (turn it off in the UI if you like)
-8. **Last:** delete the local `terraform.tfstate*` and `.terraform/` folders, but only after every stack above is destroyed.
+8. **Last**, and only after every stack above is destroyed: delete the state objects **and their versions** under `s3://tfstate-mdorn/cspm-remed-demo/`. Then delete the local `terraform.tfstate*` leftovers, the `.terraform/` folders and the `~/cspm-remed-demo-state-backup-*` copy. The `tfstate-mdorn` bucket itself is yours to keep or remove.
 
 ## Building the remediation workflows (optional, not yet built)
 The Datadog provider manages workflows through `datadog_workflow_automation`, but the first version of each is built in the UI, where Datadog's own action pickers fill in the Slack, Jira and AWS connection parameters. After that the exported JSON lives in `datadog/workflows/` and Terraform manages it.

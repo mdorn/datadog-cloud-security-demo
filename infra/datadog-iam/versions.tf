@@ -1,5 +1,14 @@
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.10"
+
+  backend "s3" {
+    bucket       = "tfstate-mdorn"
+    key          = "cspm-remed-demo/datadog-iam/terraform.tfstate"
+    region       = "us-east-2"
+    profile      = "default"
+    encrypt      = true
+    use_lockfile = true
+  }
 
   required_providers {
     aws = {

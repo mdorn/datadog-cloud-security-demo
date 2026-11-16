@@ -1,8 +1,11 @@
-# Read-only lookup of the demo bucket name from the local state of infra/vulnerable.
+# Read-only lookup of the demo bucket name from the state of infra/vulnerable.
 data "terraform_remote_state" "vulnerable" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "${path.module}/../infra/vulnerable/terraform.tfstate"
+    bucket  = "tfstate-mdorn"
+    key     = "cspm-remed-demo/vulnerable/terraform.tfstate"
+    region  = "us-east-2"
+    profile = "default"
   }
 }
 
