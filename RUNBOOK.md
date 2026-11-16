@@ -1,6 +1,48 @@
 # RUNBOOK: cspm-remed-demo
 
-> Work in progress. Demo-day checklist, scan timing and break/reset steps are added in later phases.
+Demo storyline: **detect → prioritize → route → remediate → verify** with Datadog Cloud Security.
+
+## Make targets
+| Target | What it does | Changes things? |
+|---|---|---|
+| `make status` | Account check; whether the bucket, security group and IAM user are each armed or fixed; host and running image tag/digest; newest ECR images; latest Actions run | No |
+| `make break` | `terraform plan` on `infra/vulnerable/`, summary, **y/N**, apply; then makes sure the baseline image has the `baseline` ECR tag, redeploys `DEMO_BASELINE_TAG`, and shows status | Yes, after confirmation |
+| `make reset` | Same re-arm as `break`; then, if `app/pom.xml` on `main` differs from the baseline, a `reset/…` branch plus a revert PR (**y/N**); redeploys the baseline image; prints the Jira JQL and link for open demo issues | Yes, after confirmation |
+| `make deploy-image [TAG=…]` | Deploys an image tag to the host through the `cspm-remed-demo-redeploy` SSM document | Yes |
+| `make fix-pr DEP=log4j\|commons-text\|jackson [DRY_RUN=1]` | One-line dependency bump on a `fix/…` branch, then a PR (**y/N**) | Yes, after confirmation |
+
+## Scan timing (observed in this sandbox)
+| Event | Observed |
+|---|---|
+| New S3 / security group resource → first failing misconfiguration | 6–20 min |
+| New IAM user → "IAM user has administrative privileges" | ~1 h 50 min |
+| New IAM user → "...and is inactive" | ~6 h |
+| Security group fixed (rule revoked) → finding passes | ~9 min |
+| Datadog docs: misconfiguration re-evaluation interval | 15 min to 4 h depending on resource type |
+| Container image vulnerabilities | After the Agent scans a newly pulled image (minutes) |
+| Host vulnerabilities | After the Agent's host SBOM scan (first one at boot, then periodic) |
+
+The findings API and UI can lag `evaluation_changed_at` by a while. **Notification rules only fire when a finding starts failing**, so a finding that's already failing won't post again until it has passed once. `make break` after a fix is what re-arms the Slack route.
+
+## Demo-day checklist
+- **T-24 h or earlier:** run `make break` and confirm the plan. Then:
+  - `make status`: everything shows ARMED, and the host runs `DEMO_BASELINE_TAG`.
+  - In Datadog, check that the S3 (`hkp-p6b-f7w`, `def-000-ea8`), security group (`tch-c9p-gh4`) and IAM user (`def-000-eui`) findings are failing with `env:demo`.
+  - Check that the container image shows Log4Shell, Text4Shell and the jackson CVEs.
+- **T-2 h:** run `make status` again. Check that #mdorn-demo-public has the notification posts. Have the Jira project `KAN` board open.
+- **During the demo:**
+  1. **Detect:** Cloud Security → Misconfigurations and Vulnerabilities, filtered on `env:demo`.
+  2. **Prioritize:** severity, the public bucket and admin user, Log4Shell (critical, exploit available).
+  3. **Route:** the Slack posts from the `cspm-remed-demo-*` notification rules. Create a Jira issue from the finding panel.
+  4. **Remediate:**
+     - Misconfigurations: enable Block Public Access on the bucket, and remove the 0.0.0.0/0 rule. Use the console, the finding panel's fix, or (once built) the workflows.
+     - Vulnerabilities: in GitHub's web editor, change `<log4j.version>2.14.1</log4j.version>` to `2.26.1` → create a branch and PR → merge (or run `make fix-pr DEP=log4j`).
+  5. **Verify:**
+     - The security group finding passes in about 10 minutes.
+     - The Action builds and redeploys (`make status` shows the new tag).
+     - The image findings for log4j close after the Agent scans the new image.
+- **After:** run `make reset` and confirm. Merge the revert PR if one was opened, and close the Jira issues it lists.
+
 
 ## Prerequisites
 - `aws` CLI with profile `default` pointed at account `897722680419`
@@ -42,14 +84,23 @@ Don't commit `*.tfstate`, and don't delete it: losing state orphans resources.
 | ec2:DescribeSecurityGroups | `*` (AWS doesn't support resource-level permissions for Describe*) |
 | ec2:RevokeSecurityGroupIngress | security groups in us-east-2/897722680419, in the demo VPC (`ec2:Vpc`), where tag `Name` matches `cspm-remed-demo-*` (SG ARNs use random IDs, so they can't be scoped by name) |
 
-## Teardown (outline; ask before running any destroy)
-1. Datadog notification rules and workflows (Phase 4), then `infra/vuln-host/` (`terraform destroy`; ECR has `force_delete`).
-2. `infra/vulnerable/`: `terraform destroy` (the bucket has `force_destroy`, so the placeholder object goes with it).
-3. `infra/datadog-iam/`: `terraform destroy` removes the connection, the roles, the OIDC provider and the app key registration. Run this **before** `infra/network/`, because it looks up the demo VPC.
-4. `infra/network/`: `terraform destroy`.
-5. `datadog/`: use `terraform state rm` on both resources rather than destroy, so the pre-existing integration and scan options stay in place.
+## Full teardown (run each destroy only after reviewing its plan)
+Run `scripts/preflight.sh` first, and `export TF_VAR_dd_api_key="$DD_API_KEY" TF_VAR_datadog_app_key_id=$(scripts/dd-app-key-id.sh)`.
+1. **Datadog notification rules:** `terraform -chdir=datadog destroy -target=datadog_security_notification_rule.s3_public -target=datadog_security_notification_rule.sg_open_ssh -target=datadog_security_notification_rule.critical_vulns`. Use a targeted destroy, never a full one; see step 6. If you built workflows in the UI, delete them there too.
+2. `infra/vuln-host/`: `terraform destroy` removes the EC2 host, ECR repo (`force_delete`, images included), SSM parameter and document, host role and security group.
+3. `infra/vulnerable/`: `terraform destroy` removes the bucket (`force_destroy`, placeholder included), the security group and the IAM user.
+4. `infra/datadog-iam/`: `terraform destroy` removes the Workflow connection and role, the GitHub OIDC provider and role, and the app key registration. Run it **before** `infra/network/`, because it looks up the demo VPC.
+5. `infra/network/`: `terraform destroy`.
+6. `datadog/`: use `terraform state rm datadog_integration_aws_account.demo datadog_agentless_scanning_aws_scan_options.demo` rather than destroy, so the pre-existing integration and scan options stay in place. They also have `prevent_destroy`.
+7. **Left in place on purpose:**
+   - the CloudFormation stacks (`DatadogIntegration*`, `DatadogAgentlessIntegration`)
+   - the GitHub repo and its branches
+   - Jira issues in `KAN` (use the JQL from `make reset`)
+   - the Slack channel
+   - the app key's Actions API Access toggle (turn it off in the UI if you like)
+8. **Last:** delete the local `terraform.tfstate*` and `.terraform/` folders, but only after every stack above is destroyed.
 
-## Building the remediation workflows (one-time, in the UI)
+## Building the remediation workflows (optional, not yet built)
 The Datadog provider manages workflows through `datadog_workflow_automation`, but the first version of each is built in the UI, where Datadog's own action pickers fill in the Slack, Jira and AWS connection parameters. After that the exported JSON lives in `datadog/workflows/` and Terraform manages it.
 
 Prerequisites (already done in the sandbox org): the Datadog Slack app is connected to workspace **Datadog**, the Jira integration (`textmethod.atlassian.net`) is active, and connection **`cspm-remed-demo-aws`** exists (Terraform `infra/datadog-iam/`).

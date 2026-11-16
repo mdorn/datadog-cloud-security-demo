@@ -28,3 +28,6 @@ app/target/
 
 # Local-only planning notes
 PROMPT.md
+
+# Terraform plan logs written by scripts
+**/.plan.log
